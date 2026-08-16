@@ -22,6 +22,16 @@ import { createAudioPlayer, setAudioModeAsync } from "expo-audio";
 import { clamp, hashString } from "../utils/misc";
 import { ensureSynthWav, cachedSynthUri } from "./synthRenderer";
 
+// How long the embed gets to actually start playing before we fall back to the
+// synth preview. Generous on purpose: a cold WebView + slow network can take
+// well over ten seconds just to load the player and buffer the stream, and a
+// premature fallback is what makes "the real song never plays" (the preview
+// keeps taking over). Genuine embed errors still fall back instantly.
+const YT_START_TIMEOUT_MS = 15000;
+// After a track falls back, wait this long before trying YouTube for it again —
+// a transient slow start must not exile the track to the preview forever.
+const YT_RETRY_COOLDOWN_MS = 30000;
+
 /** Player state names shared with the YoutubeBridge (single source of truth). */
 export const YT_STATES = {
   PLAYING: "playing",
@@ -66,12 +76,16 @@ class AudioEngine {
     this.youtubeAvailable = null; // null = unknown, true = ok, false = failed
     this.youtubeFailed = false;
     this._ytFailAt = 0; // when the embed last failed to init (for retry cooldown)
-    this._ytFailedFor = null; // track id that already fell back for THIS track
+    this._ytFailedFor = null; // track id that already fell back (with cooldown)
+    this._ytFailedAt = 0; // when that track fell back (for the retry cooldown)
     this._ytCuedId = null;
     this._pendingPlay = false;
     this._apiPromise = null;
     this._settleYt = null;
     this._ytVerifyTimer = null;
+    this._ytHadPlayed = false; // has the embed actually started this track?
+    this._ytErrorFor = null; // track id of the most recent (maybe spurious) embed error
+    this._ytErrorAt = 0; // when that error arrived (for the repeated-error check)
 
     // callbacks
     this.onEnded = null;
@@ -146,7 +160,14 @@ class AudioEngine {
   }
 
   _onYtState(state) {
+    if (__DEV__) console.log("[dbg] ytState", state, "prov:", this.provider, "playing:", this.playing);
+    // Only the YouTube provider's events count. Once playback has fallen back
+    // to the preview, the embed's state changes are just echoes of our own
+    // setPlay(false) — honoring them would flip the app to "paused" while the
+    // preview audio keeps playing (and could double-advance on ENDED).
+    if (this.provider !== "youtube") return;
     if (state === YT_STATES.PLAYING) {
+      this._ytHadPlayed = true;
       if (!this.playing) {
         this.playing = true;
         this._emit();
@@ -167,10 +188,30 @@ class AudioEngine {
   }
 
   _onYtError() {
+    if (__DEV__) console.log("[dbg] ytError", this.track?.id, "hadPlayed:", this._ytHadPlayed, "errFor:", this._ytErrorFor, "repeated:", !!this.track && this._ytErrorFor === this.track.id && Date.now() - this._ytErrorAt < 5000);
+    // The embed in this environment frequently fires a spurious error (code 2,
+    // invalid_parameter) right after loadVideoById — yet the video loads and
+    // plays normally a moment later. Treating that as a hard failure falls back
+    // to the preview, whose audio-focus request then PAUSES the real video that
+    // was about to start. So only fall back immediately when the failure is
+    // clearly real: the video was already playing and died, or a retry ALSO
+    // errored. A first error while the video is still starting is ignored and
+    // the start-verify window decides (it still falls back if the video never
+    // plays within YT_START_TIMEOUT_MS).
+    const t = this.track;
+    const repeated =
+      !!t && this._ytErrorFor === t.id && Date.now() - this._ytErrorAt < 5000;
+    if (t?.youtubeId && !this._ytHadPlayed && !repeated) {
+      this._ytErrorFor = t.id;
+      this._ytErrorAt = Date.now();
+      return;
+    }
     // A per-video error (embed disabled, region block, …) falls back for THIS
     // track only — it must not disable YouTube for the whole session, or one
-    // blocked video would force every later song to the synth preview.
-    this._ytFailedFor = this.track?.id || null;
+    // blocked video would force every later song to the synth preview. The
+    // cooldown still lets a later play retry YouTube (some errors are transient).
+    this._ytFailedFor = t?.id || null;
+    this._ytFailedAt = Date.now();
     const wasPending = this._pendingPlay;
     const wasPlaying = this.playing;
     this._pendingPlay = false;
@@ -181,8 +222,8 @@ class AudioEngine {
     this.playing = false;
     // Fall back to the synth provider whether the video was still starting
     // (pending) or failed mid-playback.
-    if (this.track && (wasPending || wasPlaying)) {
-      this._loadSynth(this.track);
+    if (t && (wasPending || wasPlaying)) {
+      this._loadSynth(t);
       this._playSynth();
     }
     if (this.onMessage) {
@@ -194,7 +235,13 @@ class AudioEngine {
   _ytEligible(track) {
     // Only a fundamental failure (embed unavailable) disqualifies YouTube;
     // "unknown" (youtubeAvailable null) still gets a chance at play time.
-    return !!(track?.youtubeId && !this.youtubeFailed);
+    if (!track?.youtubeId || this.youtubeFailed) return false;
+    // A track that already fell back gets a fresh YouTube attempt after a
+    // cooldown — a slow cold start must not exile it to the preview forever.
+    if (this._ytFailedFor === track.id && Date.now() - this._ytFailedAt < YT_RETRY_COOLDOWN_MS) {
+      return false;
+    }
+    return true;
   }
 
   _ytStart() {
@@ -205,11 +252,18 @@ class AudioEngine {
     }
     const b = this._yt;
     if (!b || !this.youtubeReady) {
-      this._fallbackToSynth("YouTube isn't ready — using preview audio instead.");
+      this._fallbackToSynth("YouTube isn't ready — using preview audio instead.", true);
       return;
     }
     this._pendingPlay = false;
     this._ytCuedId = t.youtubeId;
+    // Fresh attempt: the previous error/spurious-error state is for the old
+    // play, not this one.
+    this._ytHadPlayed = false;
+    this._ytErrorFor = null;
+    this._ytErrorAt = 0;
+    // Real playback is taking over — stop the preview so the two never overlap.
+    this._pauseSynth();
     b.setVideoId(t.youtubeId);
     b.setPlay(true);
     this.playing = true;
@@ -218,39 +272,48 @@ class AudioEngine {
   }
 
   /**
-   * Start verification: if the embed hasn't actually started within a few
-   * seconds (autoplay policy on a cold start, blocked video, slow web load),
-   * retry once — then fall back to the synth provider so the music never
-   * silently stops. The window is generous because the embed announces its
-   * own state when it starts; a real player is usually well inside it.
+   * Start verification: keep an eye on the embed until it actually starts.
+   * The embed announces its own state when it begins, so a real player clears
+   * this immediately; we only fall back to the synth provider when it has
+   * silently stalled for the whole YT_START_TIMEOUT_MS window (cold WebView
+   * load, buffering, autoplay policy) — never on a slow-but-progressing start.
+   * Genuine embed errors still fall back instantly via _onYtError.
    */
   _ytVerifyStart() {
     clearTimeout(this._ytVerifyTimer);
-    this._ytVerifyTimer = setTimeout(() => {
+    const deadline = Date.now() + YT_START_TIMEOUT_MS;
+    const check = () => {
       if (!this.playing || !this.youtubeReady || !this._yt) return;
       const st = this._yt.getState();
-      if (st !== YT_STATES.PLAYING && st !== YT_STATES.BUFFERING) {
-        try {
-          this._yt.setPlay(true);
-        } catch {
-          this._fallbackToSynth("YouTube couldn't start this video — using preview audio instead.");
-          return;
-        }
-        this._ytVerifyTimer = setTimeout(() => {
-          if (!this.playing || !this.youtubeReady || !this._yt) return;
-          const st2 = this._yt.getState();
-          if (st2 !== YT_STATES.PLAYING && st2 !== YT_STATES.BUFFERING) {
-            this._fallbackToSynth("YouTube couldn't start this video — using preview audio instead.");
-          }
-        }, 2400);
+      if (__DEV__) console.log("[dbg] verify", st, "pos:", this._yt.getCurrentTime());
+      if (st === YT_STATES.PLAYING || st === YT_STATES.BUFFERING) return;
+      if (Date.now() >= deadline) {
+        // Slow start, not a hard error — do NOT remember the track, so the
+        // next play retries YouTube (the embed is warm by then and starts fast).
+        this._fallbackToSynth("YouTube couldn't start this video — using preview audio instead.");
+        return;
       }
-    }, 1400);
+      // Still loading — nudge autoplay and re-check shortly.
+      try {
+        this._yt.setPlay(true);
+      } catch {
+        /* noop — the next check falls back when the deadline passes */
+      }
+      this._ytVerifyTimer = setTimeout(check, 2000);
+    };
+    this._ytVerifyTimer = setTimeout(check, 2000);
   }
 
-  _fallbackToSynth(message) {
-    // Remember that THIS track already tried YouTube and failed, so a resume
-    // (pause → play) goes straight to the synth instead of stalling again.
-    this._ytFailedFor = this.track?.id || null;
+  _fallbackToSynth(message, remember = false) {
+    if (__DEV__) console.log("[dbg] fallbackToSynth", this.track?.id, "remember:", remember, "msg:", message);
+    // remember=true is only for HARD failures (embed error, YouTube
+    // unavailable): it routes an immediate resume straight to the synth
+    // instead of stalling again, for the retry cooldown. Slow starts don't
+    // remember — the embed is warm on the next play and starts quickly.
+    if (remember) {
+      this._ytFailedFor = this.track?.id || null;
+      this._ytFailedAt = Date.now();
+    }
     if (this._yt && this.youtubeReady) {
       try {
         this._yt.setPlay(false);
@@ -281,6 +344,10 @@ class AudioEngine {
     this._progression = null;
     this._position = 0;
     this._ytFailedFor = null; // a new track gets a fresh YouTube attempt
+    this._ytFailedAt = 0;
+    this._ytHadPlayed = false;
+    this._ytErrorFor = null;
+    this._ytErrorAt = 0;
     const provider = this._ytEligible(track) ? "youtube" : "synth";
     if (provider !== this.provider) {
       this.provider = provider;
@@ -297,8 +364,9 @@ class AudioEngine {
       this.youtubeFailed = false;
       this.youtubeAvailable = null;
     }
-    // Try YouTube for this track unless this exact track already fell back.
-    if (this._ytEligible(this.track) && this._ytFailedFor !== this.track.id) {
+    // Try YouTube for this track unless it fell back within the retry cooldown
+    // (that check lives inside _ytEligible).
+    if (this._ytEligible(this.track)) {
       if (this.provider !== "youtube") {
         this.provider = "youtube";
         if (this.onProviderChange) this.onProviderChange("youtube");
@@ -317,10 +385,16 @@ class AudioEngine {
         this._warmSynth();
         this.initYouTube().then((ok) => {
           if (!ok) {
-            this._fallbackToSynth("YouTube is unavailable — using preview audio instead.");
+            // The user may have paused while the embed was booting — only fall
+            // back if they still want to play.
+            if (this._pendingPlay) {
+              this._fallbackToSynth("YouTube is unavailable — using preview audio instead.", true);
+            }
             return;
           }
           if (this.provider !== "youtube" || !this.youtubeReady || !this._yt) return;
+          // A pause while the embed was loading cancels the pending play.
+          if (!this._pendingPlay) return;
           this._pendingPlay = false;
           this._ytStart();
         });
@@ -341,12 +415,18 @@ class AudioEngine {
 
   pause() {
     clearTimeout(this._ytVerifyTimer);
+    // Cancel any play that is still waiting for the embed to finish booting —
+    // a pause is a pause, even before the video starts.
+    this._pendingPlay = false;
     if (this.provider === "youtube" && this.youtubeReady && this._yt) {
       try {
         this._yt.setPlay(false);
       } catch {
         /* noop */
       }
+      // If a preview track is somehow still running underneath (a fallback
+      // that raced a resume), stop it too — the user asked for silence.
+      this._pauseSynth();
       this.playing = false;
       this._emit();
       return;

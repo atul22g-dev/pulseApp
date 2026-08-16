@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { Volume2, Volume1, VolumeX } from "lucide-react-native";
 import { usePlayer } from "../context/PlayerContext";
@@ -14,6 +15,10 @@ function VolumeIcon({ volume, color }) {
 export default function VolumeControl({ style }) {
   const { volume, setVolume } = usePlayer();
   const t = useTheme();
+  // Remember the last non-zero level so unmute returns to it instead of
+  // always jumping to a hardcoded default.
+  const lastVolume = useRef(0.8);
+  if (volume > 0) lastVolume.current = volume;
 
   return (
     <View style={[styles.row, style]}>
@@ -21,7 +26,7 @@ export default function VolumeControl({ style }) {
         label={volume === 0 ? "Unmute" : "Mute"}
         onPress={() => {
           if (volume > 0) setVolume(0);
-          else setVolume(0.8);
+          else setVolume(lastVolume.current || 0.8);
         }}
       >
         {({ color }) => <VolumeIcon volume={volume} color={color} />}

@@ -259,7 +259,7 @@ const styles = StyleSheet.create({
   album: {
     width: 120,
     fontSize: 12.5,
-    display: "none", // hidden on narrow screens (mobile-first like the web)
+    display: "none", // hidden on narrow screens (Pulse-first like the web)
   },
   duration: {
     fontSize: 12,

@@ -38,6 +38,12 @@ function NativeYoutubeBridge() {
   const cache = useRef({ time: 0, duration: 0, state: YT_STATES.UNSTARTED });
   // The engine assigns onReady/onStateChange/onError onto this object.
   const callbacks = useRef({});
+  // Mirror of the `play` prop for event handlers, so onChangeState always sees
+  // the latest engine intent (not a stale closure value).
+  const playRef = useRef(false);
+  useEffect(() => {
+    playRef.current = play;
+  }, [play]);
 
   useEffect(() => {
     const bridge = {
@@ -128,17 +134,34 @@ function NativeYoutubeBridge() {
           else setTimeout(() => callbacks.current.onReady?.(), 50);
         }}
         onChangeState={(state) => {
-          // The library reports numeric states; map them to the engine's
-          // string names so native and web speak the same language (the
-          // engine compares against YT_STATES strings).
-          const mapped = STATE_MAP[state];
-          if (mapped) cache.current.state = mapped;
+          if (__DEV__) console.log("[dbg] bridge state", state, "playRef:", playRef.current);
+          // NOTE: react-native-youtube-iframe already converts the WebView's
+          // numeric IFrame states to the engine's string names (its
+          // PLAYER_STATES maps -1/0/1/2/3/5 → "unstarted"/"ended"/…), so
+          // `state` here is ALREADY a YT_STATES string — do NOT map it back
+          // through STATE_MAP (that map is only for the raw numeric events
+          // the web bridge receives).
+          cache.current.state = state;
+          // A pause issued while the video was still loading can't stop the
+          // load's autoplay — the embed reports PLAYING anyway the moment the
+          // stream starts. Re-assert the user's pause so the audio actually
+          // stops (the library patch exposes pauseVideo for this).
+          if (state === YT_STATES.PLAYING && !playRef.current && ref.current?.pauseVideo) {
+            try {
+              ref.current.pauseVideo();
+            } catch {
+              /* noop */
+            }
+          }
           // Only forward the meaningful ones to the engine.
-          if (state === 1 || state === 2 || state === 0) {
-            callbacks.current.onStateChange?.(mapped);
+          if (state === YT_STATES.PLAYING || state === YT_STATES.PAUSED || state === YT_STATES.ENDED) {
+            callbacks.current.onStateChange?.(state);
           }
         }}
-        onError={() => callbacks.current.onError?.()}
+        onError={(code) => {
+          if (__DEV__) console.log("[dbg] bridge error", code);
+          callbacks.current.onError?.(code);
+        }}
       />
     </View>
   );

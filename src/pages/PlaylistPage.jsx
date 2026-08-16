@@ -13,7 +13,6 @@ import { getMainPlaylist, getPlaylist, youtubePlaylists } from "../data/playlist
 import { getPlaylistTracks } from "../utils/library";
 import { formatListDuration, pluralize } from "../utils/format";
 import { shuffleArray } from "../utils/misc";
-import { isLiveApiConfigured } from "../services/youtubeService";
 import { useTheme } from "../lib/useTheme";
 import { alpha, white } from "../lib/theme";
 import { PrimaryBtn, GhostBtn, Chip } from "../components/ui";
@@ -212,9 +211,7 @@ function PlaylistHeader({ playlist, tracks, syncState, syncNow, catalogLength, i
                   ? "Syncing with YouTube…"
                   : syncState === "offline"
                     ? "YouTube unreachable — showing local copy"
-                    : isLiveApiConfigured()
-                      ? `Live · ${catalogLength} tracks synced`
-                      : `Live YouTube playlist · ${catalogLength} tracks`}
+                    : `Live YouTube playlist · ${catalogLength} tracks`}
               </Text>
             </>
           ) : null}

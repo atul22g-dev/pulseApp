@@ -132,6 +132,14 @@ function usePlayerCore(toast, stateRef, settings, bumpCatalogVersion) {
     engine.onError = (msg) => toast.push(msg, "error");
     engine.onMessage = (msg) => toast.push(msg, "info");
     engine.onProviderChange = (p) => setProvider(p);
+    // The engine is the source of truth for whether audio is actually
+    // playing. Mirroring its emissions into the UI state means the button and
+    // position poll always follow reality — even if this provider ever
+    // remounts (dev Fast Refresh, crash recovery) while the module-level
+    // engine keeps playing underneath.
+    engine.onStateChange = ({ playing }) => {
+      setIsPlaying(playing);
+    };
     engine.setVolume(volume);
     // Warm up the hidden YouTube player so the first play is instant and
     // still inside the user's gesture.
@@ -140,6 +148,7 @@ function usePlayerCore(toast, stateRef, settings, bumpCatalogVersion) {
       engine.onError = null;
       engine.onMessage = null;
       engine.onProviderChange = null;
+      engine.onStateChange = null;
       engine.onEnded = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

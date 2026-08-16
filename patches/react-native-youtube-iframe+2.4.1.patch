@@ -1,8 +1,79 @@
 diff --git a/node_modules/react-native-youtube-iframe/lib/commonjs/YoutubeIframe.js b/node_modules/react-native-youtube-iframe/lib/commonjs/YoutubeIframe.js
-index 0be2dad..d4843ca 100644
+index 0be2dad..2fe4556 100644
 --- a/node_modules/react-native-youtube-iframe/lib/commonjs/YoutubeIframe.js
 +++ b/node_modules/react-native-youtube-iframe/lib/commonjs/YoutubeIframe.js
-@@ -152,7 +152,11 @@ const YoutubeIframe = (props, ref) => {
+@@ -46,15 +46,17 @@ const YoutubeIframe = (props, ref) => {
+   const initialPlayerParamsRef = (0, _react.useRef)(initialPlayerParams || {});
+   const webViewRef = (0, _react.useRef)(null);
+   const eventEmitter = (0, _react.useRef)(new _events.EventEmitter());
+-  const sendPostMessage = (0, _react.useCallback)((eventName, meta) => {
++  // The hosted iframe_v2.html message listener switches on the RAW command
++  // string (it destructures e.data and compares it to "playVideo" etc.), but
++  // this library posts JSON ({eventName, meta}) — so every play/pause/mute/
++  // volume command was silently dropped on Android. Drive them with direct
++  // injectJavaScript calls instead (the same mechanism the library already
++  // uses for seeking and the getters).
++  const sendCommand = (0, _react.useCallback)(script => {
+     if (!playerReady) {
+       return;
+     }
+-    const message = JSON.stringify({
+-      eventName,
+-      meta
+-    });
+-    webViewRef.current.postMessage(message);
++    webViewRef.current.injectJavaScript(script);
+   }, [playerReady]);
+   (0, _react.useImperativeHandle)(ref, () => ({
+     getVideoUrl: () => {
+@@ -101,32 +103,26 @@ const YoutubeIframe = (props, ref) => {
+     },
+     seekTo: (seconds, allowSeekAhead) => {
+       webViewRef.current.injectJavaScript(_PlayerScripts.PLAYER_FUNCTIONS.seekToScript(seconds, allowSeekAhead));
++    },
++    playVideo: () => {
++      webViewRef.current.injectJavaScript(_PlayerScripts.PLAYER_FUNCTIONS.playVideo);
++    },
++    pauseVideo: () => {
++      webViewRef.current.injectJavaScript(_PlayerScripts.PLAYER_FUNCTIONS.pauseVideo);
+     }
+   }), []);
+   (0, _react.useEffect)(() => {
+-    if (play) {
+-      sendPostMessage('playVideo', {});
+-    } else {
+-      sendPostMessage('pauseVideo', {});
+-    }
+-  }, [play, sendPostMessage]);
++    sendCommand(play ? _PlayerScripts.PLAYER_FUNCTIONS.playVideo : _PlayerScripts.PLAYER_FUNCTIONS.pauseVideo);
++  }, [play, sendCommand]);
+   (0, _react.useEffect)(() => {
+-    if (mute) {
+-      sendPostMessage('muteVideo', {});
+-    } else {
+-      sendPostMessage('unMuteVideo', {});
+-    }
+-  }, [mute, sendPostMessage]);
++    sendCommand(mute ? _PlayerScripts.PLAYER_FUNCTIONS.muteVideo : _PlayerScripts.PLAYER_FUNCTIONS.unMuteVideo);
++  }, [mute, sendCommand]);
+   (0, _react.useEffect)(() => {
+-    sendPostMessage('setVolume', {
+-      volume
+-    });
+-  }, [sendPostMessage, volume]);
++    sendCommand(_PlayerScripts.PLAYER_FUNCTIONS.setVolume(volume));
++  }, [sendCommand, volume]);
+   (0, _react.useEffect)(() => {
+-    sendPostMessage('setPlaybackRate', {
+-      playbackRate
+-    });
+-  }, [sendPostMessage, playbackRate]);
++    sendCommand(_PlayerScripts.PLAYER_FUNCTIONS.setPlaybackRate(playbackRate));
++  }, [sendCommand, playbackRate]);
+   (0, _react.useEffect)(() => {
+     if (!playerReady || lastVideoIdRef.current === videoId) {
+       // no instance of player is ready
+@@ -152,7 +148,11 @@ const YoutubeIframe = (props, ref) => {
    }, [playList, play, playListStartIndex, playerReady]);
    const onWebMessage = (0, _react.useCallback)(event => {
      try {
@@ -16,10 +87,82 @@ index 0be2dad..d4843ca 100644
          case 'fullScreenChange':
            onFullScreenChange(message.data);
 diff --git a/node_modules/react-native-youtube-iframe/src/YoutubeIframe.js b/node_modules/react-native-youtube-iframe/src/YoutubeIframe.js
-index 4bbf487..954b564 100644
+index 4bbf487..c6c4032 100644
 --- a/node_modules/react-native-youtube-iframe/src/YoutubeIframe.js
 +++ b/node_modules/react-native-youtube-iframe/src/YoutubeIframe.js
-@@ -185,7 +185,11 @@ const YoutubeIframe = (props, ref) => {
+@@ -55,14 +55,19 @@ const YoutubeIframe = (props, ref) => {
+   const webViewRef = useRef(null);
+   const eventEmitter = useRef(new EventEmitter());
+ 
+-  const sendPostMessage = useCallback(
+-    (eventName, meta) => {
++  // The hosted iframe_v2.html message listener switches on the RAW command
++  // string (it destructures e.data and compares it to "playVideo" etc.), but
++  // this library posts JSON ({eventName, meta}) — so every play/pause/mute/
++  // volume command was silently dropped on Android. Drive them with direct
++  // injectJavaScript calls instead (the same mechanism the library already
++  // uses for seeking and the getters).
++  const sendCommand = useCallback(
++    script => {
+       if (!playerReady) {
+         return;
+       }
+ 
+-      const message = JSON.stringify({eventName, meta});
+-      webViewRef.current.postMessage(message);
++      webViewRef.current.injectJavaScript(script);
+     },
+     [playerReady],
+   );
+@@ -121,33 +126,31 @@ const YoutubeIframe = (props, ref) => {
+           PLAYER_FUNCTIONS.seekToScript(seconds, allowSeekAhead),
+         );
+       },
++      playVideo: () => {
++        webViewRef.current.injectJavaScript(PLAYER_FUNCTIONS.playVideo);
++      },
++      pauseVideo: () => {
++        webViewRef.current.injectJavaScript(PLAYER_FUNCTIONS.pauseVideo);
++      },
+     }),
+     [],
+   );
+ 
+   useEffect(() => {
+-    if (play) {
+-      sendPostMessage('playVideo', {});
+-    } else {
+-      sendPostMessage('pauseVideo', {});
+-    }
+-  }, [play, sendPostMessage]);
++    sendCommand(play ? PLAYER_FUNCTIONS.playVideo : PLAYER_FUNCTIONS.pauseVideo);
++  }, [play, sendCommand]);
+ 
+   useEffect(() => {
+-    if (mute) {
+-      sendPostMessage('muteVideo', {});
+-    } else {
+-      sendPostMessage('unMuteVideo', {});
+-    }
+-  }, [mute, sendPostMessage]);
++    sendCommand(mute ? PLAYER_FUNCTIONS.muteVideo : PLAYER_FUNCTIONS.unMuteVideo);
++  }, [mute, sendCommand]);
+ 
+   useEffect(() => {
+-    sendPostMessage('setVolume', {volume});
+-  }, [sendPostMessage, volume]);
++    sendCommand(PLAYER_FUNCTIONS.setVolume(volume));
++  }, [sendCommand, volume]);
+ 
+   useEffect(() => {
+-    sendPostMessage('setPlaybackRate', {playbackRate});
+-  }, [sendPostMessage, playbackRate]);
++    sendCommand(PLAYER_FUNCTIONS.setPlaybackRate(playbackRate));
++  }, [sendCommand, playbackRate]);
+ 
+   useEffect(() => {
+     if (!playerReady || lastVideoIdRef.current === videoId) {
+@@ -185,7 +188,11 @@ const YoutubeIframe = (props, ref) => {
    const onWebMessage = useCallback(
      event => {
        try {

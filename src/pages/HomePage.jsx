@@ -135,8 +135,10 @@ export default function HomePage() {
 const styles = StyleSheet.create({
   heroSkeleton: {
     gap: 18,
+    paddingTop: 3,
   },
   heading: {
+    paddingTop: 12,
     marginBottom: 0,
   },
   quickRow: {

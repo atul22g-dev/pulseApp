@@ -1,15 +1,15 @@
-# PULSE — Mobile (Expo)
+# PULSE — Pulse (Expo)
 
 A fully native **Expo (React Native)** port of the PULSE personal music player
 web app (React + Vite + Tailwind). Same product, same data model, same
 `music-player-*` storage keys — no backend, no accounts, fully local.
 
-The source web app is untouched; everything here lives in `mobile/`.
+The source web app is untouched; everything here lives in `Pulse/`.
 
 ## Run it
 
 ```bash
-cd mobile
+cd Pulse
 npm install
 
 # Expo Go (fastest — all libraries used here are Expo Go compatible)
@@ -31,17 +31,10 @@ PULSE branding.
   learned during playback and written back into the catalog.
 - **Atual API (optional)**: set `EXPO_PUBLIC_ATUAL_API_KEY` in `.env` to fetch
   playlists from `https://apis-atual-dev.vercel.app/api/playlists` (key sent
-  as the `X-API-Key` header) instead of the public feed — see
-  `src/config/atualApi.js`.
-- **YouTube Data API (optional)**: set `EXPO_PUBLIC_YOUTUBE_API_KEY` in `.env`
-  to switch sync to the YouTube Data API v3 (full pagination, durations
-  included) — the equivalent of the web app's `VITE_YOUTUBE_API_KEY` path.
-  Precedence: Atual API > YouTube Data API > public feed.
+  as the `X-API-Key` header) — see `src/config/atualApi.js`.
 - **CORS relay (web builds only)**: YouTube's feed sends no CORS headers, so
-  the browser reads it through a relay. Local dev works out of the box
-  (corsproxy.io + an allorigins fallback); for production web deployments set
-  `EXPO_PUBLIC_FEED_PROXY` to your own relay — a URL template containing
-  `{url}`, or a comma-separated list tried in order. Native never uses it.
+  the browser reads it through a relay (corsproxy.io + an allorigins
+  fallback). Native never uses it.
 - The cached catalog (`music-player-catalog-v3`) renders the whole app
   instantly on cold start, fully offline.
 
@@ -75,7 +68,7 @@ Other notable substitutions:
   IFrame player's `cuePlaylist`/`getPlaylist`; `react-native-youtube-iframe`
   doesn't expose those getters, so native uses YouTube's public
   `feeds/videos.xml` endpoint instead. Note: the public feed caps playlists at
-  ~15 entries — larger libraries should set `EXPO_PUBLIC_YOUTUBE_API_KEY`.
+  ~15 entries.
 
 ## Behavioral changes vs. the web app (with justification)
 
@@ -93,7 +86,7 @@ Other notable substitutions:
    active provider visible.
 3. **Playlist enumeration without an API key uses the YouTube feed** (see
    above) instead of the hidden-player `getPlaylist()` readback.
-4. **No keyboard shortcuts.** Mobile has no keyboard; shortcuts became
+4. **No keyboard shortcuts.** Pulse has no keyboard; shortcuts became
    on-screen controls, hardware volume keys, and lock-screen play/pause.
 5. **First-visit skeletons** use an in-memory session flag instead of
    `sessionStorage`.
