@@ -1,0 +1,34 @@
+diff --git a/node_modules/react-native-youtube-iframe/lib/commonjs/YoutubeIframe.js b/node_modules/react-native-youtube-iframe/lib/commonjs/YoutubeIframe.js
+index 0be2dad..d4843ca 100644
+--- a/node_modules/react-native-youtube-iframe/lib/commonjs/YoutubeIframe.js
++++ b/node_modules/react-native-youtube-iframe/lib/commonjs/YoutubeIframe.js
+@@ -152,7 +152,11 @@ const YoutubeIframe = (props, ref) => {
+   }, [playList, play, playListStartIndex, playerReady]);
+   const onWebMessage = (0, _react.useCallback)(event => {
+     try {
+-      const message = JSON.parse(event.nativeEvent.data);
++      const rawMessage =
++        typeof event.nativeEvent.data === 'string'
++          ? event.nativeEvent.data
++          : JSON.stringify(event.nativeEvent.data);
++      const message = JSON.parse(rawMessage);
+       switch (message.eventType) {
+         case 'fullScreenChange':
+           onFullScreenChange(message.data);
+diff --git a/node_modules/react-native-youtube-iframe/src/YoutubeIframe.js b/node_modules/react-native-youtube-iframe/src/YoutubeIframe.js
+index 4bbf487..954b564 100644
+--- a/node_modules/react-native-youtube-iframe/src/YoutubeIframe.js
++++ b/node_modules/react-native-youtube-iframe/src/YoutubeIframe.js
+@@ -185,7 +185,11 @@ const YoutubeIframe = (props, ref) => {
+   const onWebMessage = useCallback(
+     event => {
+       try {
+-        const message = JSON.parse(event.nativeEvent.data);
++        const rawMessage =
++          typeof event.nativeEvent.data === 'string'
++            ? event.nativeEvent.data
++            : JSON.stringify(event.nativeEvent.data);
++        const message = JSON.parse(rawMessage);
+ 
+         switch (message.eventType) {
+           case 'fullScreenChange':
